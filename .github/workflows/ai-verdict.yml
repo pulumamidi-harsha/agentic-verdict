@@ -158,14 +158,22 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p "${AGENTIC_TMP}"
-          if [[ -f "${AGENTIC_TMP}/quality-gate/quality-gate.md" ]]; then
-            cp "${AGENTIC_TMP}/quality-gate/quality-gate.md" "${AGENTIC_TMP}/quality-gate.md"
+          for f in quality-gate.md gate-result.json findings.json coverage-findings.json \
+                   semgrep-findings.json lizard-findings.json jscpd-findings.json; do
+            if [[ -f "${AGENTIC_TMP}/quality-gate/${f}" ]]; then
+              cp "${AGENTIC_TMP}/quality-gate/${f}" "${AGENTIC_TMP}/${f}"
+              echo "Staged quality-gate/${f}"
+            fi
+          done
+          # Future: DAST / Burp reports can be staged here the same way (e.g. burp-report.json)
+          echo "── Pass 2 evidence inventory ──"
+          ls -la "${AGENTIC_TMP}" | head -60 || true
+          if [[ -f "${AGENTIC_TMP}/gate-result.json" ]]; then
+            echo "gate-result.json:"
+            cat "${AGENTIC_TMP}/gate-result.json"
+          else
+            echo "::warning::gate-result.json missing — Pass 2 cannot hard-enforce quality-gate"
           fi
-          if [[ -f "${AGENTIC_TMP}/quality-gate/gate-result.json" ]]; then
-            cp "${AGENTIC_TMP}/quality-gate/gate-result.json" "${AGENTIC_TMP}/gate-result.json"
-          fi
-          # Future: DAST / Burp reports can be staged here the same way
-          ls -la "${AGENTIC_TMP}" | head -40 || true
 
       - name: AI Pass 2 — review and verdict
         continue-on-error: true

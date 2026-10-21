@@ -153,6 +153,15 @@ const customPayload = read(`${AGENTIC_TMP}/validated-payload.txt`).trim();
 const checkCoverageMd = read(`${AGENTIC_TMP}/check-coverage.md`).trim();
 let coverageData = {};
 try { coverageData = JSON.parse(read(`${AGENTIC_TMP}/check-coverage.json`, '{}')); } catch {}
+const qualityGateMd = read(`${AGENTIC_TMP}/quality-gate.md`).trim()
+  || read(`${AGENTIC_TMP}/quality-gate/quality-gate.md`).trim();
+let gateResult = {};
+try {
+  gateResult = JSON.parse(
+    read(`${AGENTIC_TMP}/gate-result.json`, '{}')
+    || read(`${AGENTIC_TMP}/quality-gate/gate-result.json`, '{}')
+  );
+} catch { /* ignore */ }
 const pass1SummaryMd = read(`${AGENTIC_TMP}/pass1-summary.md`).trim();
 const instructionSource = read(`${AGENTIC_TMP}/instruction-source.txt`, 'none').trim();
 const passed = process.env.CHECKS_PASSED ?? '0';
@@ -306,16 +315,28 @@ const issuesTable = prIssues.length
   ].join('\n')
   : '';
 
+const gateStatus = gateResult.status || (qualityGateMd ? 'see below' : 'n/a');
+const gateMode = gateResult.mode || 'n/a';
+const gateBlocking = gateResult.blocking === true ? 'yes' : gateResult.blocking === false ? 'no' : 'n/a';
+const gateSummaryCell = gateStatus === 'n/a'
+  ? 'n/a'
+  : `\`${gateStatus}\` · mode \`${gateMode}\` · blocking \`${gateBlocking}\``;
+
 const runSummaryTable = [
   '| | |',
   '|:---|:---|',
   `| **Stack** | ${stackInfo} |`,
   `| **Checks** | ${checksStatus} |`,
   `| **Security scans** | ${securityStatus} |`,
+  `| **Quality gate** | ${gateSummaryCell} |`,
   `| **Review mode** | ${reviewType} · ${changedFiles} files · ${diffLines} diff lines |`,
   `| **Duration** | ${durationStr} |`,
   runUrl ? `| **Workflow** | [View run #${process.env.GITHUB_RUN_ID || '?'}](${runUrl}) |` : '',
 ].filter(Boolean).join('\n');
+
+const qualityGateBlock = qualityGateMd
+  ? subsection('🚦 Agentic quality gate', qualityGateMd)
+  : '';
 
 const ownerInstructionsBlock = customPayload ? [
   customPayload.split('\n').filter(l => l.trim()).map(l => `> ${l.trim()}`).join('\n'),
@@ -412,6 +433,7 @@ const body = [
   '',
   runSummaryTable,
   '',
+  qualityGateBlock,
   prIssues.length
     ? `### Issues in your changed files (${prIssues.length})\n\n${issuesTable}\n`
     : reviewData.verdict !== 'approve'

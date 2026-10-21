@@ -35,6 +35,18 @@ QUALITY_GATE_RESULTS=$(head -c 8000 "${AGENTIC_TMP}/quality-gate.md" 2>/dev/null
 if [[ -z "$QUALITY_GATE_RESULTS" && -f "${AGENTIC_TMP}/quality-gate/quality-gate.md" ]]; then
   QUALITY_GATE_RESULTS=$(head -c 8000 "${AGENTIC_TMP}/quality-gate/quality-gate.md" 2>/dev/null || echo "")
 fi
+GATE_RESULT_JSON=$(head -c 4000 "${AGENTIC_TMP}/gate-result.json" 2>/dev/null || echo "")
+if [[ -z "$GATE_RESULT_JSON" && -f "${AGENTIC_TMP}/quality-gate/gate-result.json" ]]; then
+  GATE_RESULT_JSON=$(head -c 4000 "${AGENTIC_TMP}/quality-gate/gate-result.json" 2>/dev/null || echo "")
+fi
+GATE_FINDINGS_SUMMARY=""
+if [[ -f "${AGENTIC_TMP}/quality-gate/findings.json" ]]; then
+  GATE_FINDINGS_SUMMARY=$(jq -c '[.[] | {engine,severity,category,path,message:(.message|.[0:160]),in_pr_diff}] | .[0:40]' \
+    "${AGENTIC_TMP}/quality-gate/findings.json" 2>/dev/null || echo "")
+elif [[ -f "${AGENTIC_TMP}/findings.json" ]]; then
+  GATE_FINDINGS_SUMMARY=$(jq -c '[.[] | {engine,severity,category,path,message:(.message|.[0:160]),in_pr_diff}] | .[0:40]' \
+    "${AGENTIC_TMP}/findings.json" 2>/dev/null || echo "")
+fi
 CUSTOM_PAYLOAD=$(head -c 2000 "${AGENTIC_TMP}/validated-payload.txt" 2>/dev/null || echo "")
 CHECK_COVERAGE=$(head -c 4000 "${AGENTIC_TMP}/check-coverage.md" 2>/dev/null || echo "")
 
@@ -53,7 +65,20 @@ build_verdict_hints() {
     fi
     echo ""
     if [[ -s "$changed" ]] && ! grep -qvE '^\.github/workflows/' "$changed" 2>/dev/null; then
-      echo "> **Workflow-only PR:** Failures from repo-wide lint/typecheck/test (e2e/, src/, etc.) are **pre-existing / out of scope**. Verdict must be **approve** unless actionlint/security finds issues **in the workflow files above**."
+      echo "> **Workflow-only PR:** Repo-wide lint/typecheck/test failures outside workflows are out of scope. Still honor **quality-gate** / actionlint / gitleaks findings on the workflow files above."
+      echo ""
+    fi
+    if [[ -f "${AGENTIC_TMP}/gate-result.json" ]] || [[ -f "${AGENTIC_TMP}/quality-gate/gate-result.json" ]]; then
+      local gate_file="${AGENTIC_TMP}/gate-result.json"
+      [[ -f "$gate_file" ]] || gate_file="${AGENTIC_TMP}/quality-gate/gate-result.json"
+      echo "## Agentic quality-gate machine result (authoritative for merge risk)"
+      echo ""
+      echo '```json'
+      head -c 2500 "$gate_file"
+      echo ""
+      echo '```'
+      echo ""
+      echo "> If status=fail with secrets or security_hotspots > 0 → verdict must be **reject**. Advisory mode does not authorize approve."
       echo ""
     fi
     if [[ -f "${AGENTIC_TMP}/check-results.txt" ]]; then
@@ -113,7 +138,13 @@ ${SONAR_RESULTS}
 ## PR Quality Gate (agentic-quality-gate — Semgrep, duplication %, complexity, coverage %)
 ${QUALITY_GATE_RESULTS:-Not available}
 
-Review this PR. Prefer quality-gate metrics for coverage/duplication/complexity/hotspots; use CI check results for lint/tests. Separate PR-introduced issues from repo_health (pre-existing). Align verdict with quality-gate + automated scans."
+## Quality-gate gate-result.json
+${GATE_RESULT_JSON:-Not available}
+
+## Quality-gate findings (truncated)
+${GATE_FINDINGS_SUMMARY:-Not available}
+
+Review this PR. Prefer quality-gate metrics for coverage/duplication/complexity/hotspots/secrets; use CI check results for lint/tests. Separate PR-introduced issues from repo_health (pre-existing). Align verdict with quality-gate + automated scans. Do NOT approve when quality-gate status=fail for secrets/hotspots — even in advisory mode or for 'pilot/seed' code."
 
 export CHECKS_PASSED="${CHECKS_PASSED:-}"
 export CHECKS_FAILED="${CHECKS_FAILED:-}"
@@ -139,13 +170,19 @@ if bash "${SCRIPT_DIR}/call-llm.sh" "${AGENTIC_TMP}/ai-review.txt" "@${AGENTIC_T
         > "${AGENTIC_TMP}/ai-review.txt"
     fi
   fi
-  # If verdict penalizes PR but no issue is in changed files, correct to approve.
+  # Deterministic post-process: honor quality-gate, then only soft-approve true out-of-scope CI noise.
   if [[ -f "${AGENTIC_TMP}/ai-review.txt" ]]; then
     CHANGED_JSON='[]'
     if [[ -f "${AGENTIC_TMP}/pr-changed-files.txt" ]]; then
       CHANGED_JSON=$(jq -R -s -c 'split("\n") | map(select(length > 0))' "${AGENTIC_TMP}/pr-changed-files.txt" 2>/dev/null) || CHANGED_JSON='[]'
     fi
-    jq --argjson changed "$CHANGED_JSON" '
+    GATE_JSON='{}'
+    if [[ -f "${AGENTIC_TMP}/gate-result.json" ]]; then
+      GATE_JSON=$(cat "${AGENTIC_TMP}/gate-result.json")
+    elif [[ -f "${AGENTIC_TMP}/quality-gate/gate-result.json" ]]; then
+      GATE_JSON=$(cat "${AGENTIC_TMP}/quality-gate/gate-result.json")
+    fi
+    jq --argjson changed "$CHANGED_JSON" --argjson gate "$GATE_JSON" '
       def as_text($v):
         if $v == null then ""
         elif ($v | type) == "string" then $v
@@ -159,8 +196,43 @@ if bash "${SCRIPT_DIR}/call-llm.sh" "${AGENTIC_TMP}/ai-review.txt" "@${AGENTIC_T
       . as $r
       | .verdict_rationale = as_text(.verdict_rationale)
       | .summary = as_text(.summary)
+      | ($gate.status // "") as $gstatus
+      | (($gate.counts.secrets // 0) | tonumber) as $secrets
+      | (($gate.counts.security_hotspots // 0) | tonumber) as $hotspots
+      | (($gate.counts.errors_in_diff // 0) | tonumber) as $errs
+      | (($gate.counts.warnings_in_diff // 0) | tonumber) as $warns
+      | ($gate.fail_reasons // []) as $fails
       | ($r.issues // [] | map(select(.is_pr_change == true or in_changed(.file)))) as $pr_issues
-      | if (.verdict == "needs_work" or .verdict == "reject") and ($pr_issues | length) == 0 then
+      # 1) Hard override from quality-gate — never approve a failed gate with secrets/hotspots
+      | if ($gstatus == "fail") and ($secrets > 0 or $hotspots > 0 or $errs > 0) then
+          .
+          | .verdict = "reject"
+          | .verdict_rationale = (
+              "Quality gate failed with security findings (mode=" + (($gate.mode // "unknown") | tostring) + "):\n"
+              + (($fails | map("- " + .) | join("\n")) // "- see gate-result.json")
+              + "\nAdvisory/pilot labels do not authorize approve when secrets or hotspots are present."
+            )
+          | .verdict_reasons = ((.verdict_reasons // []) + [{
+              scope: "quality_gate",
+              file: "",
+              reason: ("gate status=fail secrets=" + ($secrets|tostring) + " hotspots=" + ($hotspots|tostring))
+            }])
+          | .summary = ("Quality gate failed — " + (.summary // ""))
+        elif ($gstatus == "fail") and (($fails | length) > 0 or $warns > 0) and (.verdict == "approve" or .verdict == "comment") then
+          .
+          | .verdict = "needs_work"
+          | .verdict_rationale = (
+              (.verdict_rationale // "")
+              + "\nQuality gate status=fail — must not approve:\n"
+              + (($fails | map("- " + .) | join("\n")) // "- see gate-result.json")
+            )
+          | .verdict_reasons = ((.verdict_reasons // []) + [{
+              scope: "quality_gate",
+              file: "",
+              reason: "gate status=fail (coverage/complexity/duplication or other warn conditions)"
+            }])
+        # 2) Soft-approve only when gate did not fail AND LLM rejected solely for out-of-scope CI
+        elif ($gstatus != "fail") and (.verdict == "needs_work" or .verdict == "reject") and ($pr_issues | length) == 0 then
           .
           | .verdict = "approve"
           | .verdict_rationale = (.verdict_rationale + "\n- Repo-wide CI failures (e.g. e2e/, src/) are outside this PRs changed files — not counted against this PR.")
@@ -173,6 +245,7 @@ if bash "${SCRIPT_DIR}/call-llm.sh" "${AGENTIC_TMP}/ai-review.txt" "@${AGENTIC_T
         end
     ' "${AGENTIC_TMP}/ai-review.txt" > "${AGENTIC_TMP}/ai-review-adjusted.json" 2>/dev/null \
       && mv "${AGENTIC_TMP}/ai-review-adjusted.json" "${AGENTIC_TMP}/ai-review.txt"
+    agentic_log "  Post-process verdict=$(jq -r '.verdict // "unknown"' "${AGENTIC_TMP}/ai-review.txt" 2>/dev/null || echo unknown)"
   fi
 else
   echo '{"summary":"AI review failed - API call error","verdict":"comment","confidence":0,"issues":[],"positives":[],"suggestions":[]}' > "${AGENTIC_TMP}/ai-review.txt"
