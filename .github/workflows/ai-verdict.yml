@@ -1,0 +1,358 @@
+# Job 3 — AI Pass 2 + PR comment/labels.
+# Runs AFTER agentic-review (phase1) and agentic-quality-gate.
+# Consumes artifacts: agentic-prepare, agentic-checks, agentic-scans, agentic-metrics.
+name: AI Verdict (Pass 2)
+
+on:
+  workflow_call:
+    inputs:
+      pipeline_repository:
+        description: Hub repo (org/repo)
+        required: false
+        type: string
+        default: pulumamidi-harsha/agentic-verdict
+      pipeline_ref:
+        description: Git ref / SHA for hub scripts
+        required: false
+        type: string
+        default: main
+      ai_model:
+        required: false
+        type: string
+        default: gpt-4.1
+      review_type:
+        required: false
+        type: string
+        default: full
+      pr_size:
+        required: false
+        type: string
+        default: normal
+      diff_lines:
+        required: false
+        type: string
+        default: "0"
+      changed_files:
+        required: false
+        type: string
+        default: "0"
+      pr_scope:
+        required: false
+        type: string
+        default: code
+      checks_passed:
+        required: false
+        type: string
+        default: "0"
+      checks_failed:
+        required: false
+        type: string
+        default: "0"
+      checks_exit:
+        required: false
+        type: string
+        default: "0"
+      setup_failed:
+        required: false
+        type: string
+        default: "false"
+      security_exit:
+        required: false
+        type: string
+        default: "0"
+      quality_gate_artifact:
+        description: Artifact from quality-gate job
+        required: false
+        type: string
+        default: agentic-metrics
+    secrets:
+      AI_API_KEY:
+        required: true
+      AI_API_ENDPOINT:
+        required: true
+      ORG_PAT:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ai-verdict-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  AGENTIC_TMP: /tmp/agentic-verdict
+  PIPELINE_DIR: /tmp/agentic-verdict-pipeline
+  REVIEW_TYPE: ${{ inputs.review_type }}
+  AI_MODEL: ${{ inputs.ai_model }}
+  GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
+  GITHUB_EVENT_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+  GITHUB_EVENT_PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  PR_TITLE: ${{ github.event.pull_request.title }}
+  PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+
+jobs:
+  gate:
+    name: Check skip label
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.skip_check.outputs.skip }}
+    steps:
+      - id: skip_check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = context.payload.pull_request?.labels?.map(l => l.name) || [];
+            const skip = labels.includes('skip-ai-review') || labels.includes('no-review') || labels.includes('skip-ai-verdict');
+            if (skip) core.info('Skipping AI verdict — PR has skip label');
+            core.setOutput('skip', skip.toString());
+
+  verdict:
+    name: AI Pass 2 and publish
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Clone verdict hub
+        env:
+          PIPELINE_TOKEN: ${{ secrets.ORG_PAT || github.token }}
+          PIPELINE_REPO: ${{ inputs.pipeline_repository }}
+          PIPELINE_REF: ${{ inputs.pipeline_ref }}
+        run: |
+          rm -rf "$PIPELINE_DIR"
+          git clone "https://x-access-token:${PIPELINE_TOKEN}@github.com/${PIPELINE_REPO}.git" "$PIPELINE_DIR"
+          git -C "$PIPELINE_DIR" checkout "$PIPELINE_REF"
+
+      - name: Download prepare artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: agentic-prepare
+          path: ${{ env.AGENTIC_TMP }}
+
+      - name: Download checks artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: agentic-checks
+          path: ${{ env.AGENTIC_TMP }}
+
+      - name: Download security artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: agentic-scans
+          path: ${{ env.AGENTIC_TMP }}
+
+      - name: Download quality-gate metrics
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: ${{ inputs.quality_gate_artifact }}
+          path: ${{ env.AGENTIC_TMP }}/quality-gate
+
+      - name: Stage quality-gate for Pass 2
+        continue-on-error: true
+        run: |
+          mkdir -p "${AGENTIC_TMP}"
+          if [[ -f "${AGENTIC_TMP}/quality-gate/quality-gate.md" ]]; then
+            cp "${AGENTIC_TMP}/quality-gate/quality-gate.md" "${AGENTIC_TMP}/quality-gate.md"
+          fi
+          if [[ -f "${AGENTIC_TMP}/quality-gate/gate-result.json" ]]; then
+            cp "${AGENTIC_TMP}/quality-gate/gate-result.json" "${AGENTIC_TMP}/gate-result.json"
+          fi
+          # Future: DAST / Burp reports can be staged here the same way
+          ls -la "${AGENTIC_TMP}" | head -40 || true
+
+      - name: AI Pass 2 — review and verdict
+        continue-on-error: true
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_API_ENDPOINT: ${{ secrets.AI_API_ENDPOINT }}
+          PR_SIZE: ${{ inputs.pr_size }}
+          DIFF_LINES: ${{ inputs.diff_lines }}
+          CHANGED_FILES: ${{ inputs.changed_files }}
+          REVIEW_TYPE: ${{ inputs.review_type }}
+          CHECKS_PASSED: ${{ inputs.checks_passed }}
+          CHECKS_FAILED: ${{ inputs.checks_failed }}
+          CHECKS_EXIT: ${{ inputs.checks_exit }}
+          SETUP_FAILED: ${{ inputs.setup_failed }}
+          PR_SCOPE: ${{ inputs.pr_scope }}
+        run: bash "$PIPELINE_DIR/scripts/ai-pass2.sh"
+
+      - name: Post review to PR
+        uses: actions/github-script@v7
+        env:
+          AGENTIC_TMP: ${{ env.AGENTIC_TMP }}
+          CHECKS_PASSED: ${{ inputs.checks_passed }}
+          CHECKS_FAILED: ${{ inputs.checks_failed }}
+          CHECKS_EXIT: ${{ inputs.checks_exit }}
+          SETUP_FAILED: ${{ inputs.setup_failed }}
+          PR_SCOPE: ${{ inputs.pr_scope }}
+          PIPELINE_DIR: ${{ env.PIPELINE_DIR }}
+          DOCKER_FOUND: "false"
+          SECURITY_EXIT: ${{ inputs.security_exit }}
+          PR_SIZE: ${{ inputs.pr_size }}
+          DIFF_LINES: ${{ inputs.diff_lines }}
+          CHANGED_FILES: ${{ inputs.changed_files }}
+          REVIEW_TYPE: ${{ inputs.review_type }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_STARTED_AT: ${{ github.run_started_at }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        with:
+          script: |
+            const path = require('path');
+            const modPath = path.join(process.env.PIPELINE_DIR || '/tmp/agentic-verdict-pipeline', 'scripts', 'post-review.js');
+            const { body, reviewData, COMMENT_MARKER } = require(modPath);
+
+            const isAiComment = (c) => {
+              const login = c.user?.login || '';
+              const bot = c.user?.type === 'Bot' || login === 'github-actions[bot]' || login.startsWith('github-actions');
+              if (!bot || !c.body) return false;
+              return c.body.includes(COMMENT_MARKER) || c.body.startsWith('## 🤖 AI Code Review');
+            };
+
+            let allComments = [];
+            for (let page = 1; page <= 10; page++) {
+              const { data } = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                per_page: 100,
+                page
+              });
+              allComments = allComments.concat(data);
+              if (data.length < 100) break;
+            }
+
+            const aiComments = allComments.filter(isAiComment).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+            const existing = aiComments[0] || null;
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+              for (const dup of aiComments.slice(1)) {
+                try {
+                  await github.rest.issues.deleteComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: dup.id
+                  });
+                } catch (e) { console.log('delete duplicate comment:', e.message); }
+              }
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
+
+            const verdict = reviewData.verdict;
+            try {
+              const { data: existingReviews } = await github.rest.pulls.listReviews({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number
+              });
+              for (const review of existingReviews.filter(r =>
+                r.user.login === 'github-actions[bot]' &&
+                (r.state === 'APPROVED' || r.state === 'CHANGES_REQUESTED'))) {
+                try {
+                  await github.rest.pulls.dismissReview({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: context.issue.number,
+                    review_id: review.id,
+                    message: 'Superseded by new AI review run'
+                  });
+                } catch (e) { console.log('dismiss:', e.message); }
+              }
+            } catch (e) { console.log('list reviews:', e.message); }
+
+            const reviewNote = '_See the **🤖 AI Code Review** comment (updated each run) for details._';
+            if (verdict === 'approve') {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                event: 'APPROVE',
+                body: reviewNote
+              }).catch(e => console.log('approve:', e.message));
+            } else if (verdict === 'reject' || verdict === 'needs_work') {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                event: 'REQUEST_CHANGES',
+                body: reviewNote
+              }).catch(e => console.log('request changes:', e.message));
+            }
+
+            const AI_LABELS = ['ai-approved', 'ai-rejected', 'ai-needs-work', 'ai-review-suggestions'];
+            const labelDefs = {
+              'ai-approved': { color: '1a7f37', description: 'AI PR review: approved' },
+              'ai-rejected': { color: 'b60205', description: 'AI PR review: changes required' },
+              'ai-review-suggestions': { color: 'd1242f', description: 'AI PR review: suggestions (non-blocking)' }
+            };
+            for (const [name, meta] of Object.entries(labelDefs)) {
+              try {
+                await github.rest.issues.getLabel({ owner: context.repo.owner, repo: context.repo.repo, name });
+              } catch (e) {
+                if (e.status === 404) {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name,
+                    color: meta.color,
+                    description: meta.description
+                  });
+                }
+              }
+            }
+            let targetLabel = null;
+            if (verdict === 'approve') targetLabel = 'ai-approved';
+            else if (verdict === 'reject') targetLabel = 'ai-rejected';
+            else if (verdict === 'needs_work') targetLabel = 'ai-review-suggestions';
+
+            const { data: issue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+            const current = (issue.labels || []).map(l => l.name);
+            for (const name of AI_LABELS) {
+              if (current.includes(name) && name !== targetLabel) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  name
+                }).catch(e => console.log('remove label:', e.message));
+              }
+            }
+            if (targetLabel) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: [targetLabel]
+              }).catch(e => console.log('add label:', e.message));
+              core.info(`PR label set: ${targetLabel} (verdict=${verdict})`);
+            }
+
+      - name: Step summary
+        if: always()
+        run: |
+          echo "## AI Verdict (Pass 2)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Mode: ${{ inputs.review_type }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Consumed: agentic-prepare, agentic-checks, agentic-scans, ${{ inputs.quality_gate_artifact }}" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,70 @@
+# Drop into an app as .github/workflows/agentic-pipeline.yml
+# Three jobs in sequence (same workflow run — artifacts pass between them):
+#   1) agentic-review phase1  → checks + security + coverage artifact
+#   2) agentic-quality-gate   → Semgrep / dup% / complexity / coverage%
+#   3) agentic-verdict        → AI Pass 2 comment + labels
+#
+# Pin every uses: / pipeline_ref to a full SHA before production.
+name: Agentic PR Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  # ── Job 1: AI Pass 1 + lint/test + security (no Docker) ─────────────
+  ai-phase1:
+    uses: pulumamidi-harsha/agentic-review/.github/workflows/ai-review-phase1.yml@main
+    with:
+      pipeline_repository: pulumamidi-harsha/agentic-review
+      pipeline_ref: main
+      custom_instructions: |
+        We use pnpm. Run lint and unit tests with coverage so an lcov.info is produced.
+    secrets:
+      AI_API_KEY: ${{ secrets.AI_API_KEY }}
+      AI_API_ENDPOINT: ${{ secrets.AI_API_ENDPOINT }}
+      ORG_PAT: ${{ secrets.ORG_PAT }}
+      ARTIFACTORY_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+      ARTIFACTORY_AUTH_TOKEN: ${{ secrets.ARTIFACTORY_AUTH_TOKEN }}
+
+  # ── Job 2: Sonar-style quality gate (uses coverage from job 1) ───────
+  quality-gate:
+    needs: ai-phase1
+    if: always() && needs.ai-phase1.result == 'success'
+    uses: pulumamidi-harsha/agentic-quality-gate/.github/workflows/quality-gate.yml@main
+    with:
+      pipeline_repository: pulumamidi-harsha/agentic-quality-gate
+      pipeline_ref: main
+      coverage_artifact: agentic-coverage
+      # gate_mode: advisory
+    secrets:
+      ORG_PAT: ${{ secrets.ORG_PAT }}
+
+  # ── Job 3: AI Pass 2 verdict (uses checks + quality-gate data) ───────
+  ai-verdict:
+    needs: [ai-phase1, quality-gate]
+    if: always() && needs.ai-phase1.result == 'success'
+    uses: pulumamidi-harsha/agentic-verdict/.github/workflows/ai-verdict.yml@main
+    with:
+      pipeline_repository: pulumamidi-harsha/agentic-verdict
+      pipeline_ref: main
+      review_type: full
+      pr_size: ${{ needs.ai-phase1.outputs.pr_size }}
+      diff_lines: ${{ needs.ai-phase1.outputs.diff_lines }}
+      changed_files: ${{ needs.ai-phase1.outputs.changed_files }}
+      pr_scope: ${{ needs.ai-phase1.outputs.pr_scope }}
+      checks_passed: ${{ needs.ai-phase1.outputs.checks_passed }}
+      checks_failed: ${{ needs.ai-phase1.outputs.checks_failed }}
+      checks_exit: ${{ needs.ai-phase1.outputs.checks_exit }}
+      setup_failed: ${{ needs.ai-phase1.outputs.setup_failed }}
+      security_exit: ${{ needs.ai-phase1.outputs.security_exit }}
+      quality_gate_artifact: agentic-metrics
+    secrets:
+      AI_API_KEY: ${{ secrets.AI_API_KEY }}
+      AI_API_ENDPOINT: ${{ secrets.AI_API_ENDPOINT }}
+      ORG_PAT: ${{ secrets.ORG_PAT }}
