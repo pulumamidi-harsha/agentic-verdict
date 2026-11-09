@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>agentic-verdict</title>
+<link rel="stylesheet" href="diagram.css">
+</head>
+<body>
+<div class="canvas">
+  <div class="lane pr">
+    <div class="lane-title">agentic-verdict · reads both results, writes one review</div>
+    <div class="row" style="grid-template-columns: 340px 90px 1fr 52px 250px">
+      <div class="stack">
+        <div class="box hub">
+          <div class="num">1</div>
+          <h3>agentic-review</h3>
+          <p>Lint, test, build, scans</p>
+        </div>
+        <div class="box hub">
+          <div class="num">2</div>
+          <h3>agentic-quality-gate</h3>
+          <p>Hotspots, duplication, complexity, coverage</p>
+        </div>
+      </div>
+      <div class="merge">
+        <svg viewBox="0 0 90 210" preserveAspectRatio="none">
+          <path d="M0 52 H40 C62 52 62 105 90 105" fill="none" stroke="#0091df" stroke-width="3"/>
+          <path d="M0 158 H40 C62 158 62 105 90 105" fill="none" stroke="#0091df" stroke-width="3"/>
+          <path d="M78 97 l12 8 -12 8" fill="none" stroke="#0091df" stroke-width="3"/>
+        </svg>
+      </div>
+      <div class="box hub">
+        <div class="num">AI</div>
+        <h3>Weigh the evidence</h3>
+        <p>One review from everything the earlier jobs found</p>
+      </div>
+      <div class="arrow"><svg viewBox="0 0 40 20"><path d="M0 10h32M24 2l10 8-10 8" fill="none" stroke="#de0043" stroke-width="3"/></svg></div>
+      <div class="box result">
+        <h3>AI Code Review</h3>
+        <p>Comment, approve or request changes, and a label</p>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

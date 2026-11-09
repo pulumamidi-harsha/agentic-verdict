@@ -1,0 +1,54 @@
+:root {
+  --navy: #10384f;
+  --blue: #0091df;
+  --pink: #de0043;
+  --pale: #e7f8ff;
+  --grey: #5a6b77;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  width: 1500px;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  color: var(--navy);
+  background: #ffffff;
+}
+.canvas { padding: 28px; }
+.lane { border-radius: 20px; padding: 26px 28px 28px; }
+.lane.pr { background: var(--pale); }
+.lane.rt { background: #f4f6f7; }
+.lane-title {
+  font-size: 14px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--blue); margin-bottom: 20px;
+}
+.lane.rt .lane-title { color: var(--grey); }
+.row { display: grid; align-items: stretch; }
+.arrow, .merge { display: flex; align-items: center; justify-content: center; }
+.arrow svg { width: 40px; height: 20px; }
+.merge svg { width: 90px; height: 210px; }
+.stack { display: flex; flex-direction: column; gap: 14px; }
+.quad { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.box {
+  border-radius: 14px; padding: 18px 20px;
+  display: flex; flex-direction: column; justify-content: center;
+  min-height: 108px;
+}
+.box .num {
+  width: 34px; height: 26px; border-radius: 7px;
+  background: var(--blue); color: #fff; font-weight: 700; font-size: 13px;
+  display: flex; align-items: center; justify-content: center; margin-bottom: 10px;
+}
+.box h3 { font-size: 20px; font-weight: 700; margin-bottom: 6px; }
+.box p { font-size: 15px; line-height: 1.4; color: var(--grey); }
+.start { background: #fff; border: 2px dashed var(--blue); }
+.start code {
+  display: inline-block; margin-top: 10px; padding: 5px 12px; border-radius: 8px;
+  background: var(--navy); color: #fff; font: 600 16px Menlo, Consolas, monospace;
+}
+.hub { background: var(--navy); color: #fff; }
+.hub p { color: #b9d3e3; }
+.scan { background: var(--blue); }
+.scan p { color: #e3f4ff; }
+.scan .num { background: var(--navy); }
+.result { background: #fff; border: 2px solid var(--pink); }
+.result h3 { color: var(--pink); }
+.target { background: #fff; border: 2px solid #c3ccd2; }

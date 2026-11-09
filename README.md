@@ -6,12 +6,7 @@ It runs no scanners. The full picture of all four hubs is the [Agentic AppSec ov
 
 ## What this repo does
 
-```mermaid
-flowchart LR
-    review[Results from<br/>agentic-review] --> ai[AI reads the evidence]
-    gate[Results from<br/>agentic-quality-gate] --> ai
-    ai --> out[PR comment<br/>approve or request changes<br/>label]
-```
+![What agentic-verdict does](docs/flow.png)
 
 | From | What it reads |
 |:-----|:--------------|
