@@ -2,7 +2,7 @@
 
 The last step of a pull request. It reads the results from the two earlier jobs and posts one AI review: a comment, an approve or a request for changes, and a label.
 
-It runs no scanners. The full picture of all four hubs is the [Agentic AppSec overview](https://github.com/bayer-int/agentic-review#readme).
+It runs no scanners. The full picture of all four hubs is the [Agentic AppSec overview](https://github.com/pulumamidi-harsha/agentic-review#readme).
 
 ## What this repo does
 
@@ -10,8 +10,8 @@ It runs no scanners. The full picture of all four hubs is the [Agentic AppSec ov
 
 | From | What it reads |
 |:-----|:--------------|
-| [agentic-review](https://github.com/bayer-int/agentic-review#readme) | Did lint, test, build, and the security scans pass? |
-| [agentic-quality-gate](https://github.com/bayer-int/agentic-quality-gate#readme) | Hotspots, secrets, duplication, complexity, coverage |
+| [agentic-review](https://github.com/pulumamidi-harsha/agentic-review#readme) | Did lint, test, build, and the security scans pass? |
+| [agentic-quality-gate](https://github.com/pulumamidi-harsha/agentic-quality-gate#readme) | Hotspots, secrets, duplication, complexity, coverage |
 
 The comment on the pull request is titled **AI Code Review**.
 
